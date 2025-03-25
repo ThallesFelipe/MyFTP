@@ -276,10 +276,19 @@ def client_handler(conn: socket.socket, addr) -> None:
                     continue
                 folder = parts[1]
                 dir_path = (current_dir / folder).resolve()
+                # Verificação de segurança: garantir que o caminho está dentro de BASE_DIR
+                if BASE_DIR not in dir_path.parents and dir_path != BASE_DIR:
+                    conn.sendall("Erro: Caminho inválido.\n".encode())
+                    continue
                 if dir_path.exists() and dir_path.is_dir():
                     try:
                         os.rmdir(dir_path)
                         conn.sendall("Diretório removido com sucesso.\n".encode())
+                    except OSError as e:
+                        if "Directory not empty" in str(e) or "directory not empty" in str(e):
+                            conn.sendall("Erro: O diretório não está vazio. Remova todos os arquivos e subdiretórios primeiro.\n".encode())
+                        else:
+                            conn.sendall(f"Erro ao remover diretório: {str(e)}\n".encode())
                     except Exception as e:
                         conn.sendall(f"Erro ao remover diretório: {str(e)}\n".encode())
                 else:

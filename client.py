@@ -69,9 +69,21 @@ class MyFTPClientGUI:
         self.container = ttk.Frame(master)
         self.container.pack(expand=True, fill='both')
 
+        self.setup_login_ui()
+        self.setup_main_ui()
+        
+        # Inicialmente, mostrar apenas a tela de login
+        self.show_login_ui()
+        
+        # Carregamento dos ícones para os botões da sidebar
+        self.load_icons()
+
+    def setup_login_ui(self):
+        """
+        Configura a interface de login.
+        """
         # =================== FRAME DE LOGIN ===================
         self.login_frame = ttk.Frame(self.container)
-        self.login_frame.place(relx=0.5, rely=0.5, anchor='center')
 
         # Título da tela de login
         ttk.Label(
@@ -137,8 +149,11 @@ class MyFTPClientGUI:
             font=('Segoe UI', 9)
         )
         self.login_footer_label.place(relx=0.5, rely=0.98, anchor='s')
-        # =======================================================
 
+    def setup_main_ui(self):
+        """
+        Configura a interface principal.
+        """
         # =================== FRAME PRINCIPAL ===================
         self.main_frame = ttk.Frame(self.container)
 
@@ -173,7 +188,10 @@ class MyFTPClientGUI:
         self.ls_tree.pack(expand=True, fill='both')
         self.scrollbar.config(command=self.ls_tree.yview)
 
-        # Carregamento dos ícones para os botões da sidebar
+    def load_icons(self):
+        """
+        Carrega os ícones para os botões.
+        """
         def load_icon(path):
             try:
                 return ImageTk.PhotoImage(Image.open(path).resize((24, 24)))
@@ -189,7 +207,15 @@ class MyFTPClientGUI:
         self.delete_icon = load_icon("images/delete.png")
         self.logout_icon = load_icon("images/logout.png")
         self.reload_icon = load_icon("images/reload.png")
-
+        
+    def setup_sidebar_buttons(self):
+        """
+        Configura os botões da sidebar.
+        """
+        # Limpa qualquer botão existente
+        for widget in self.sidebar.winfo_children():
+            widget.destroy()
+            
         # Definição dos botões com suas funções e ícones
         btn_options = [
             ("Atualizar Lista (ls)", self.ls_command, self.reload_icon),
@@ -208,6 +234,23 @@ class MyFTPClientGUI:
             else:
                 btn = ttk.Button(self.sidebar, text=text, command=cmd, width=20)
             btn.pack(fill='x', padx=5, pady=6)
+    
+    def show_login_ui(self):
+        """
+        Exibe a interface de login.
+        """
+        self.main_frame.pack_forget() if hasattr(self, 'main_frame') else None
+        self.login_frame.place(relx=0.5, rely=0.5, anchor='center')
+        self.login_footer_label.place(relx=0.5, rely=0.98, anchor='s')
+        
+    def show_main_ui(self):
+        """
+        Exibe a interface principal.
+        """
+        self.login_frame.place_forget()
+        self.login_footer_label.place_forget()
+        self.main_frame.pack(expand=True, fill='both')
+        self.setup_sidebar_buttons()
 
     def login(self) -> None:
         """
@@ -230,9 +273,7 @@ class MyFTPClientGUI:
         response = self.connection.recv(1024).decode()
         if "bem-sucedido" in response:
             messagebox.showinfo("Login", "Login realizado com sucesso!")
-            self.login_frame.destroy()         # Remove a tela de login
-            self.login_footer_label.destroy()    # Remove o rodapé do login
-            self.main_frame.pack(expand=True, fill='both')
+            self.show_main_ui()
             self.ls_command()  # Atualiza a lista de arquivos
         else:
             messagebox.showerror("Login", response)
@@ -392,9 +433,12 @@ class MyFTPClientGUI:
         folder = simpledialog.askstring("cd", "Digite o nome do diretório:")
         if not folder:
             return
+        if not self.connection:
+            messagebox.showerror("Erro", "Não há conexão ativa com o servidor.")
+            return
         command = f"cd {folder}"
-        self.connection.sendall(command.encode()) # type: ignore
-        response = self.connection.recv(1024).decode() # type: ignore
+        self.connection.sendall(command.encode())
+        response = self.connection.recv(1024).decode()
         messagebox.showinfo("cd", response)
         self.ls_command()
 
@@ -402,9 +446,12 @@ class MyFTPClientGUI:
         """
         Volta um nível no diretório atual do servidor.
         """
+        if not self.connection:
+            messagebox.showerror("Erro", "Não há conexão ativa com o servidor.")
+            return
         command = "cd.."  # Se necessário, ajuste para "cd .." conforme o servidor
-        self.connection.sendall(command.encode()) # type: ignore # type: ignore
-        response = self.connection.recv(1024).decode() # type: ignore # type: ignore
+        self.connection.sendall(command.encode())
+        response = self.connection.recv(1024).decode()
         messagebox.showinfo("cd..", response)
         self.ls_command()
 
@@ -415,9 +462,12 @@ class MyFTPClientGUI:
         folder = simpledialog.askstring("mkdir", "Digite o nome da nova pasta:")
         if not folder:
             return
+        if not self.connection:
+            messagebox.showerror("Erro", "Não há conexão ativa com o servidor.")
+            return
         command = f"mkdir {folder}"
-        self.connection.sendall(command.encode()) # type: ignore
-        response = self.connection.recv(1024).decode() # type: ignore
+        self.connection.sendall(command.encode())
+        response = self.connection.recv(1024).decode()
         messagebox.showinfo("mkdir", response)
         self.ls_command()
 
@@ -428,15 +478,18 @@ class MyFTPClientGUI:
         folder = simpledialog.askstring("rmdir", "Digite o nome da pasta a ser removida:")
         if not folder:
             return
+        if not self.connection:
+            messagebox.showerror("Erro", "Não há conexão ativa com o servidor.")
+            return
         command = f"rmdir {folder}"
-        self.connection.sendall(command.encode()) # type: ignore
-        response = self.connection.recv(1024).decode() # type: ignore
+        self.connection.sendall(command.encode())
+        response = self.connection.recv(1024).decode()
         messagebox.showinfo("rmdir", response)
         self.ls_command()
 
     def logout(self) -> None:
         """
-        Realiza o logout do servidor FTP e reinicia a interface.
+        Realiza o logout do servidor FTP e volta para a tela de login.
         """
         try:
             if self.connection:
@@ -444,12 +497,12 @@ class MyFTPClientGUI:
                 response = self.connection.recv(1024).decode()
                 messagebox.showinfo("Logout", response)
                 self.connection.close()
+                self.connection = None
         except Exception as e:
             messagebox.showerror("Erro", str(e))
         finally:
-            # Reinicia a interface removendo os widgets atuais
-            self.container.destroy()
-            self.__init__(self.master)
+            # Mostrar tela de login novamente (em vez de chamar __init__)
+            self.show_login_ui()
 
 
 if __name__ == "__main__":
