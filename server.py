@@ -178,7 +178,8 @@ def client_handler(conn: socket.socket, addr) -> None:
                 received_bytes = 0
                 with open(safe_file_path, "wb") as f:
                     while received_bytes < file_size:
-                        chunk = conn.recv(4096)
+                        # Recebendo chunks de dados sem tentar decodificá-los
+                        chunk = conn.recv(min(4096, file_size - received_bytes))
                         if not chunk:
                             break
                         f.write(chunk)
