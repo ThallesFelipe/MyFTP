@@ -99,210 +99,200 @@ def safe_path(current_dir: Path, target: str) -> Path:
     return current_dir
 
 
+# Modified version of the client_handler to fix the issue
 def client_handler(conn: socket.socket, addr) -> None:
-    """
-    Gerencia a conexão com um cliente: realiza autenticação, processa comandos
-    e executa operações de arquivo.
-
-    Comandos suportados:
-      - login <usuario> <senha>
-      - put <nome_arquivo>
-      - get <nome_arquivo>
-      - ls
-      - cd <nome_da_pasta>
-      - cd..
-      - mkdir <nome_da_pasta>
-      - rmdir <nome_da_pasta>
-      - logout
-
-    :param conn: Socket da conexão com o cliente.
-    :param addr: Endereço do cliente.
-    :return: None
-    """
     logging.info(f"Conexão estabelecida com {addr}")
     current_dir = BASE_DIR
     authenticated = False
     username = None
 
-    # Define timeout para conexões inativas (300 segundos)
     conn.settimeout(300)
 
     try:
         while True:
-            data = conn.recv(1024).decode().strip()
-            if not data:
+            # Only decode text commands, not binary data
+            data_bytes = conn.recv(1024)
+            if not data_bytes:
                 break
-            logging.info(f"Recebido de {addr}: {data}")
-            parts = data.split()
-
-            # Comando: login
-            if parts[0] == "login":
-                if len(parts) != 3:
-                    conn.sendall("Erro: Comando login inválido. Use: login <usuario> <senha>\n".encode())
-                    continue
-                _, user, password = parts
-                if is_locked_out(user):
-                    conn.sendall("Erro: Conta bloqueada devido a múltiplas tentativas falhadas.\n".encode())
-                    continue
-                if user in users and bcrypt.checkpw(password.encode(), users[user]):
-                    authenticated = True
-                    username = user
-                    reset_failed_attempts(user)
-                    conn.sendall("Login bem-sucedido!\n".encode())
-                else:
-                    record_failed_attempt(user)
-                    conn.sendall("Erro: Usuário ou senha incorretos.\n".encode())
-
-            # Exige autenticação para os comandos subsequentes
-            elif not authenticated:
-                conn.sendall("Erro: Você deve fazer login primeiro.\n".encode())
-
-            # Comando: put (upload de arquivo)
-            elif parts[0] == "put":
-                if len(parts) != 2:
-                    conn.sendall("Erro: Comando put inválido. Use: put <nome_arquivo>\n".encode())
-                    continue
-                filename = parts[1]
-                safe_file_path = (current_dir / filename).resolve()
-                # Verifica se o caminho está dentro do BASE_DIR
-                if BASE_DIR not in safe_file_path.parents and safe_file_path != BASE_DIR:
-                    conn.sendall("Erro: Caminho de arquivo inválido.\n".encode())
-                    continue
-                conn.sendall("READY".encode())
-                file_size_str = conn.recv(1024).decode().strip()
-                try:
-                    file_size = int(file_size_str)
-                except ValueError:
-                    conn.sendall("Erro: Tamanho de arquivo inválido.\n".encode())
-                    continue
-                received_bytes = 0
-                with open(safe_file_path, "wb") as f:
-                    while received_bytes < file_size:
-                        # Recebendo chunks de dados sem tentar decodificá-los
-                        chunk = conn.recv(min(4096, file_size - received_bytes))
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        received_bytes += len(chunk)
-                if received_bytes == file_size:
-                    conn.sendall("Arquivo recebido com sucesso.\n".encode())
-                else:
-                    conn.sendall("Erro: Transferência incompleta.\n".encode())
-
-            # Comando: get (download de arquivo)
-            elif parts[0] == "get":
-                if len(parts) != 2:
-                    conn.sendall("Erro: Comando get inválido. Use: get <nome_arquivo>\n".encode())
-                    continue
-                filename = parts[1]
-                safe_file_path = (current_dir / filename).resolve()
-                if not (safe_file_path.exists() and (BASE_DIR in safe_file_path.parents or safe_file_path == BASE_DIR)):
-                    conn.sendall("Erro: Arquivo não encontrado.\n".encode())
-                    continue
-                file_size = os.path.getsize(safe_file_path)
-                conn.sendall(str(file_size).encode())
-                ack = conn.recv(1024).decode().strip()
-                if ack != "READY":
-                    continue
-                with open(safe_file_path, "rb") as f:
-                    while True:
-                        chunk = f.read(4096)
-                        if not chunk:
-                            break
-                        conn.sendall(chunk)
-                conn.sendall("Transferência concluída.\n".encode())
-
-            # Comando: ls (listar conteúdo do diretório)
-            elif parts[0] == "ls":
-                try:
-                    items = os.listdir(current_dir)
-                    if not items:
-                        conn.sendall("Diretório vazio.".encode())
+                
+            # Try to decode as text for commands
+            try:
+                data = data_bytes.decode().strip()
+                logging.info(f"Recebido de {addr}: {data}")
+                parts = data.split()
+                
+                # Comando: login
+                if parts[0] == "login":
+                    if len(parts) != 3:
+                        conn.sendall("Erro: Comando login inválido. Use: login <usuario> <senha>\n".encode())
+                        continue
+                    _, user, password = parts
+                    if is_locked_out(user):
+                        conn.sendall("Erro: Conta bloqueada devido a múltiplas tentativas falhadas.\n".encode())
+                        continue
+                    if user in users and bcrypt.checkpw(password.encode(), users[user]):
+                        authenticated = True
+                        username = user
+                        reset_failed_attempts(user)
+                        conn.sendall("Login bem-sucedido!\n".encode())
                     else:
-                        lines = []
-                        for item in items:
-                            full_path = current_dir / item
-                            if full_path.is_dir():
-                                lines.append(f"{item}:Dir:-")
-                            else:
-                                size = os.path.getsize(full_path)
-                                lines.append(f"{item}:File:{size}")
-                        response = "\n".join(lines)
-                        conn.sendall(response.encode())
-                except Exception as e:
-                    conn.sendall(f"Erro ao listar diretório: {str(e)}".encode())
+                        record_failed_attempt(user)
+                        conn.sendall("Erro: Usuário ou senha incorretos.\n".encode())
 
-            # Comando: cd (mudar de diretório)
-            elif parts[0] == "cd":
-                if len(parts) < 2:
-                    conn.sendall("Erro: Comando cd inválido. Use: cd <nome_da_pasta>\n".encode())
-                    continue
-                folder = " ".join(parts[1:])
-                new_path = safe_path(current_dir, folder)
-                if new_path.exists() and new_path.is_dir():
-                    current_dir = new_path
-                    conn.sendall(f"Diretório alterado para {str(current_dir)}\n".encode())
-                else:
-                    conn.sendall("Erro: Diretório não encontrado.\n".encode())
+                # Exige autenticação para os comandos subsequentes
+                elif not authenticated:
+                    conn.sendall("Erro: Você deve fazer login primeiro.\n".encode())
 
-            # Comando: cd.. (voltar um nível no diretório)
-            elif data == "cd..":
-                parent = current_dir.parent
-                if BASE_DIR in parent.parents or parent == BASE_DIR:
-                    current_dir = parent
-                    conn.sendall(f"Diretório alterado para {str(current_dir)}\n".encode())
-                else:
-                    conn.sendall("Erro: Já está no diretório raiz.\n".encode())
-
-            # Comando: mkdir (criar diretório)
-            elif parts[0] == "mkdir":
-                if len(parts) != 2:
-                    conn.sendall("Erro: Comando mkdir inválido. Use: mkdir <nome_da_pasta>\n".encode())
-                    continue
-                folder = parts[1]
-                new_dir = (current_dir / folder).resolve()
-                if BASE_DIR not in new_dir.parents and new_dir != BASE_DIR:
-                    conn.sendall("Erro: Caminho inválido.\n".encode())
-                    continue
-                try:
-                    os.mkdir(new_dir)
-                    conn.sendall("Diretório criado com sucesso.\n".encode())
-                except Exception as e:
-                    conn.sendall(f"Erro ao criar diretório: {str(e)}\n".encode())
-
-            # Comando: rmdir (remover diretório)
-            elif parts[0] == "rmdir":
-                if len(parts) != 2:
-                    conn.sendall("Erro: Comando rmdir inválido. Use: rmdir <nome_da_pasta>\n".encode())
-                    continue
-                folder = parts[1]
-                dir_path = (current_dir / folder).resolve()
-                # Verificação de segurança: garantir que o caminho está dentro de BASE_DIR
-                if BASE_DIR not in dir_path.parents and dir_path != BASE_DIR:
-                    conn.sendall("Erro: Caminho inválido.\n".encode())
-                    continue
-                if dir_path.exists() and dir_path.is_dir():
+                # Comando: put (upload de arquivo)
+                elif parts[0] == "put":
+                    if len(parts) != 2:
+                        conn.sendall("Erro: Comando put inválido. Use: put <nome_arquivo>\n".encode())
+                        continue
+                    filename = parts[1]
+                    safe_file_path = (current_dir / filename).resolve()
+                    # Verifica se o caminho está dentro do BASE_DIR
+                    if BASE_DIR not in safe_file_path.parents and safe_file_path != BASE_DIR:
+                        conn.sendall("Erro: Caminho de arquivo inválido.\n".encode())
+                        continue
+                    conn.sendall("READY".encode())
+                    file_size_str = conn.recv(1024).decode().strip()
                     try:
-                        os.rmdir(dir_path)
-                        conn.sendall("Diretório removido com sucesso.\n".encode())
-                    except OSError as e:
-                        if "Directory not empty" in str(e) or "directory not empty" in str(e):
-                            conn.sendall("Erro: O diretório não está vazio. Remova todos os arquivos e subdiretórios primeiro.\n".encode())
+                        file_size = int(file_size_str)
+                    except ValueError:
+                        conn.sendall("Erro: Tamanho de arquivo inválido.\n".encode())
+                        continue
+                    received_bytes = 0
+                    with open(safe_file_path, "wb") as f:
+                        while received_bytes < file_size:
+                            # Recebendo chunks de dados sem tentar decodificá-los
+                            chunk = conn.recv(min(4096, file_size - received_bytes))
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            received_bytes += len(chunk)
+                    if received_bytes == file_size:
+                        conn.sendall("Arquivo recebido com sucesso.\n".encode())
+                    else:
+                        conn.sendall("Erro: Transferência incompleta.\n".encode())
+
+                # Comando: get (download de arquivo)
+                elif parts[0] == "get":
+                    if len(parts) != 2:
+                        conn.sendall("Erro: Comando get inválido. Use: get <nome_arquivo>\n".encode())
+                        continue
+                    filename = parts[1]
+                    safe_file_path = (current_dir / filename).resolve()
+                    if not (safe_file_path.exists() and (BASE_DIR in safe_file_path.parents or safe_file_path == BASE_DIR)):
+                        conn.sendall("Erro: Arquivo não encontrado.\n".encode())
+                        continue
+                    file_size = os.path.getsize(safe_file_path)
+                    conn.sendall(str(file_size).encode())
+                    ack = conn.recv(1024).decode().strip()
+                    if ack != "READY":
+                        continue
+                    with open(safe_file_path, "rb") as f:
+                        while True:
+                            chunk = f.read(4096)
+                            if not chunk:
+                                break
+                            conn.sendall(chunk)
+                    conn.sendall("Transferência concluída.\n".encode())
+
+                # Comando: ls (listar conteúdo do diretório)
+                elif parts[0] == "ls":
+                    try:
+                        items = os.listdir(current_dir)
+                        if not items:
+                            conn.sendall("Diretório vazio.".encode())
                         else:
-                            conn.sendall(f"Erro ao remover diretório: {str(e)}\n".encode())
+                            lines = []
+                            for item in items:
+                                full_path = current_dir / item
+                                if full_path.is_dir():
+                                    lines.append(f"{item}:Dir:-")
+                                else:
+                                    size = os.path.getsize(full_path)
+                                    lines.append(f"{item}:File:{size}")
+                            response = "\n".join(lines)
+                            conn.sendall(response.encode())
                     except Exception as e:
-                        conn.sendall(f"Erro ao remover diretório: {str(e)}\n".encode())
+                        conn.sendall(f"Erro ao listar diretório: {str(e)}".encode())
+
+                # Comando: cd (mudar de diretório)
+                elif parts[0] == "cd":
+                    if len(parts) < 2:
+                        conn.sendall("Erro: Comando cd inválido. Use: cd <nome_da_pasta>\n".encode())
+                        continue
+                    folder = " ".join(parts[1:])
+                    new_path = safe_path(current_dir, folder)
+                    if new_path.exists() and new_path.is_dir():
+                        current_dir = new_path
+                        conn.sendall(f"Diretório alterado para {str(current_dir)}\n".encode())
+                    else:
+                        conn.sendall("Erro: Diretório não encontrado.\n".encode())
+
+                # Comando: cd.. (voltar um nível no diretório)
+                elif data == "cd..":
+                    parent = current_dir.parent
+                    if BASE_DIR in parent.parents or parent == BASE_DIR:
+                        current_dir = parent
+                        conn.sendall(f"Diretório alterado para {str(current_dir)}\n".encode())
+                    else:
+                        conn.sendall("Erro: Já está no diretório raiz.\n".encode())
+
+                # Comando: mkdir (criar diretório)
+                elif parts[0] == "mkdir":
+                    if len(parts) != 2:
+                        conn.sendall("Erro: Comando mkdir inválido. Use: mkdir <nome_da_pasta>\n".encode())
+                        continue
+                    folder = parts[1]
+                    new_dir = (current_dir / folder).resolve()
+                    if BASE_DIR not in new_dir.parents and new_dir != BASE_DIR:
+                        conn.sendall("Erro: Caminho inválido.\n".encode())
+                        continue
+                    try:
+                        os.mkdir(new_dir)
+                        conn.sendall("Diretório criado com sucesso.\n".encode())
+                    except Exception as e:
+                        conn.sendall(f"Erro ao criar diretório: {str(e)}\n".encode())
+
+                # Comando: rmdir (remover diretório)
+                elif parts[0] == "rmdir":
+                    if len(parts) != 2:
+                        conn.sendall("Erro: Comando rmdir inválido. Use: rmdir <nome_da_pasta>\n".encode())
+                        continue
+                    folder = parts[1]
+                    dir_path = (current_dir / folder).resolve()
+                    # Verificação de segurança: garantir que o caminho está dentro de BASE_DIR
+                    if BASE_DIR not in dir_path.parents and dir_path != BASE_DIR:
+                        conn.sendall("Erro: Caminho inválido.\n".encode())
+                        continue
+                    if dir_path.exists() and dir_path.is_dir():
+                        try:
+                            os.rmdir(dir_path)
+                            conn.sendall("Diretório removido com sucesso.\n".encode())
+                        except OSError as e:
+                            if "Directory not empty" in str(e) or "directory not empty" in str(e):
+                                conn.sendall("Erro: O diretório não está vazio. Remova todos os arquivos e subdiretórios primeiro.\n".encode())
+                            else:
+                                conn.sendall(f"Erro ao remover diretório: {str(e)}\n".encode())
+                        except Exception as e:
+                            conn.sendall(f"Erro ao remover diretório: {str(e)}\n".encode())
+                    else:
+                        conn.sendall("Erro: Diretório não encontrado.\n".encode())
+
+                # Comando: logout (encerrar conexão)
+                elif parts[0] == "logout":
+                    conn.sendall("Logout realizado.\n".encode())
+                    break
+
+                # Comando não reconhecido
                 else:
-                    conn.sendall("Erro: Diretório não encontrado.\n".encode())
+                    conn.sendall("Comando não reconhecido.\n".encode())
 
-            # Comando: logout (encerrar conexão)
-            elif parts[0] == "logout":
-                conn.sendall("Logout realizado.\n".encode())
-                break
-
-            # Comando não reconhecido
-            else:
-                conn.sendall("Comando não reconhecido.\n".encode())
+            except UnicodeDecodeError:
+                # Handle binary data (e.g., file transfer) here if needed
+                pass
 
     except socket.timeout:
         logging.warning(f"Conexão com {addr} expirou por timeout.")
